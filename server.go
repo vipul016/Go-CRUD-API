@@ -7,6 +7,8 @@ import (
 	_"github.com/lib/pq"
 	"strings"
 	"strconv"
+	"github.com/joho/godotenv"
+
 )
 var db *sql.DB
 var err error
@@ -189,9 +191,13 @@ func delete(w http.ResponseWriter,r *http.Request){
 }
 func main(){
 	
-	sqlConn := "postgres://vipul:roronoa@localhost:5432/vipul_db?sslmode=disable"
+	err := godotenv.Load()
+	if err != nil {
+		panic("Error loading .env file")
+	}
 
-	db,err = sql.Open("postgres",sqlConn)
+	sqlConn := os.Getenv("POSTGRES_CONN")
+	db, err = sql.Open("postgres", sqlConn)
 	defer db.Close()
 	if err != nil {
 		panic(err)

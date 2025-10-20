@@ -7,6 +7,7 @@ import (
 	_"github.com/lib/pq"
 	"strings"
 	"strconv"
+	"os"
 	"github.com/joho/godotenv"
 
 )
@@ -195,7 +196,6 @@ func main(){
 	if err != nil {
 		panic("Error loading .env file")
 	}
-
 	sqlConn := os.Getenv("POSTGRES_CONN")
 	db, err = sql.Open("postgres", sqlConn)
 	defer db.Close()

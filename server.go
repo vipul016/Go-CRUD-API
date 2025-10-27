@@ -9,8 +9,10 @@ import (
 	"strconv"
 	"os"
 	"github.com/joho/godotenv"
+	"log"
 
 )
+
 var db *sql.DB
 var err error
 type Detail struct{
@@ -18,6 +20,7 @@ type Detail struct{
 	Name string `json:"name"`
 	Age int `json:"age"`
 }
+var jobChannel chan Detail
 
 func get(w http.ResponseWriter,r *http.Request){
 	if r.Method != http.MethodGet {
@@ -44,7 +47,7 @@ func get(w http.ResponseWriter,r *http.Request){
 		}
 		det = append(det,d)
 	}
-	
+
 	err = rows.Err()
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -84,7 +87,7 @@ func getOne(w http.ResponseWriter,r *http.Request){
 		http.Error(w,http.StatusText(http.StatusInternalServerError),http.StatusInternalServerError)
 		return
 	}
-		
+
 	w.Header().Set("Content-Type","application/json")
 	json.NewEncoder(w).Encode(det)
 
@@ -94,23 +97,24 @@ func add(w http.ResponseWriter,r *http.Request){
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	var det Detail
-	var idDet int
 	if er := json.NewDecoder(r.Body).Decode(&det); er!=nil {
 		http.Error(w,http.StatusText(http.StatusBadRequest),http.StatusBadRequest)
 		return
 	}
-	e := db.QueryRow(`Insert into users (name,age) values ($1,$2) RETURNING id`,det.Name,det.Age).Scan(&idDet)
-	if e != nil {
-		http.Error(w,http.StatusText(http.StatusInternalServerError),http.StatusInternalServerError)
-		return
-	}
-	det.Id = idDet
+	jobChannel <- det
+	// e := db.QueryRow(`Insert into users (name,age) values ($1,$2) RETURNING id`,det.Name,det.Age).Scan(&idDet)
+	// if e != nil {
+	// 	http.Error(w,http.StatusText(http.StatusInternalServerError),http.StatusInternalServerError)
+	// 	return
+	// }
+	// det.Id = idDet
 
 	w.Header().Set("Content-Type","application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(det)
+	// json.NewEncoder(w).Encode(det)
+	json.NewEncoder(w).Encode(map[string]string{"status":"request accepted"})
 
 }
 func update(w http.ResponseWriter, r *http.Request){
@@ -190,8 +194,18 @@ func delete(w http.ResponseWriter,r *http.Request){
 	w.WriteHeader(http.StatusNoContent)
 
 }
-func main(){
+func worker(id int){
+	for job := range jobChannel {
+		_,err = db.Exec(`Insert into users (name,age) values ($1,$2)`,job.Name,job.Age)
+
+		if err != nil {
+		log.Printf("Worker %d : Error :%v\n",id,err)
+		}
+	}
 	
+}
+func main(){
+
 	err := godotenv.Load()
 	if err != nil {
 		panic("Error loading .env file")
@@ -205,6 +219,11 @@ func main(){
 	if err = db.Ping(); err != nil {
 		panic(err)
 	}
+	jobChannel = make(chan Detail, 100)
+	const numWorkers = 5
+	for w:= 1; w<= numWorkers;w++ {
+		go worker(w)
+	}
 
 	http.HandleFunc("/get",get)
 	http.HandleFunc("/get/",getOne)
@@ -216,5 +235,5 @@ func main(){
 	if err != nil {
 		panic(err)
 	}
-	
+
 }

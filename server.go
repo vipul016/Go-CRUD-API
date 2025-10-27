@@ -10,6 +10,10 @@ import (
 	"os"
 	"github.com/joho/godotenv"
 	"log"
+	"fmt"
+	"github.com/redis/go-redis/v9"
+	"context"
+	"time"
 
 )
 
@@ -21,6 +25,7 @@ type Detail struct{
 	Age int `json:"age"`
 }
 var jobChannel chan Detail
+var rdb *redis.Client
 
 func get(w http.ResponseWriter,r *http.Request){
 	if r.Method != http.MethodGet {
@@ -73,6 +78,24 @@ func getOne(w http.ResponseWriter,r *http.Request){
         http.Error(w, "Invalid event ID", http.StatusBadRequest)
         return
     }
+	cacheKey := fmt.Sprintf("user:%d",id)
+	ctx := context.Background()
+
+	val,err := rdb.Get(ctx,cacheKey).Result()
+
+	if err == nil {
+		var det Detail
+		log.Printf("Cache HIT for key: %s\n", cacheKey)
+		if err:= json.Unmarshal([]byte(val),&det);err == nil {
+			w.Header().Set("Content-Type", "application/json")
+            json.NewEncoder(w).Encode(det)
+            return
+		}
+	}
+
+	if err != redis.Nil {
+		log.Printf("Redis error (not Nil): %v\n", err)
+	}
 
 	q := db.QueryRow(`select id,name,age from users where id = $1`,id)
 
@@ -88,8 +111,22 @@ func getOne(w http.ResponseWriter,r *http.Request){
 		return
 	}
 
+
+	jsonData,marshalErr := json.Marshal(det)
+	if marshalErr != nil {
+		log.Printf("Error marshalling DB data for cache key %s: %v", cacheKey, marshalErr)
+	}else{
+		ttl := 5 * time.Minute
+		setErr := rdb.Set(ctx,cacheKey,jsonData,ttl).Err()
+		if setErr != nil {
+			log.Printf("Error setting cache for key %s: %v", cacheKey, setErr)
+		} else {
+			log.Printf("Cache SET for key: %s\n", cacheKey)
+		}
+	}
 	w.Header().Set("Content-Type","application/json")
 	json.NewEncoder(w).Encode(det)
+
 
 }
 func add(w http.ResponseWriter,r *http.Request){
@@ -157,6 +194,15 @@ func update(w http.ResponseWriter, r *http.Request){
 	}
 	det.Id = id
 
+	cacheKey := fmt.Sprintf("user:%d",id)
+	ctx := context.Background()
+	deletedCount,delErr := rdb.Del(ctx,cacheKey).Result()
+	if delErr != nil {
+		log.Printf("Failed it invalidate cache for key %s\n",cacheKey)
+	}else if deletedCount > 0 {
+		log.Printf("Cache Invalidated for key : %s\n",cacheKey)
+	}
+
 	w.Header().Set("Content-Type","application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(det)
@@ -189,6 +235,14 @@ func delete(w http.ResponseWriter,r *http.Request){
 		http.Error(w,"Id not found",http.StatusBadRequest)
 		return
 	}
+	}
+	cacheKey := fmt.Sprintf("user:%d",id)
+	ctx := context.Background()
+	deletedCount,delErr := rdb.Del(ctx,cacheKey).Result()
+	if delErr != nil {
+		log.Printf("Failed it invalidate cache for key %s\n",cacheKey)
+	}else if deletedCount > 0 {
+		log.Printf("Cache Invalidated for key : %s\n",cacheKey)
 	}
 	w.Header().Set("Content-Type","application/json")
 	w.WriteHeader(http.StatusNoContent)
@@ -223,6 +277,16 @@ func main(){
 	const numWorkers = 5
 	for w:= 1; w<= numWorkers;w++ {
 		go worker(w)
+	}
+	rdb = redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+		Password: "",
+		DB: 0,
+	})
+	_, err = rdb.Ping(context.Background()).Result();
+
+	if err != nil {
+		log.Fatalf("could not connect to Redis %v/n", err)
 	}
 
 	http.HandleFunc("/get",get)
